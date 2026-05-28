@@ -31,7 +31,7 @@ from pathlib import Path
 
 from codeocean import CodeOcean
 from codeocean.data_asset import DataAssetSearchParams
-from codeocean.computation import RunParams, DataAssetsRunParam, RunCapsuleParams, NamedRunParam
+from codeocean.computation import RunParams, DataAssetsRunParam, NamedRunParam
 
 # ---------------------------------------------------------------------------
 # Config
@@ -194,7 +194,7 @@ for subject, date, stem in pairs:
     print(f"  proc: {proc.name}  ({proc.id})")
 
     try:
-        params = RunCapsuleParams(
+        params = RunParams(
             capsule_id=DATA_DICT_CAPSULE_ID,
             data_assets=[
                 DataAssetsRunParam(id=raw.id, mount=raw.name),
