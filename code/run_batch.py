@@ -155,7 +155,7 @@ def find_asset_pair(subject: str, date: str):
     Picks the most recently-created processed asset that prefix-matches the raw.
     """
     results = client.data_assets.search_data_assets(DataAssetSearchParams(
-        query=f"single-plane-ophys_{subject}_{date}", limit=100,
+        query=f"name:single-plane-ophys_{subject}_{date}", limit=100,
     ))
     candidates = results.results
     prefix = f"single-plane-ophys_{subject}_{date}_"
