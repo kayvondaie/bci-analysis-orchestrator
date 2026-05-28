@@ -196,6 +196,30 @@ for subject, date, stem in pairs:
     print(f"  raw:  {raw.name}  ({raw.id})")
     print(f"  proc: {proc.name}  ({proc.id})")
 
+    # Pre-detach: if these assets were previously attached to the data-dict
+    # capsule at capsule level (e.g. via attach_recent_sessions.py), CO will
+    # refuse to attach them again at computation level with "403 data asset
+    # already attached". Detach first so the per-run attach is the sole
+    # source of truth. Best-effort — swallow "not attached" / 404 errors.
+    try:
+        client.capsules.detach_data_assets(
+            capsule_id=DATA_DICT_CAPSULE_ID,
+            data_assets=[raw.id, proc.id],
+        )
+        print(f"  pre-detached {raw.id}, {proc.id} from data-dict-capsule")
+    except Exception as e:
+        msg = str(e).lower()
+        if "not attached" in msg or "404" in msg or "not found" in msg:
+            pass  # they weren't attached, nothing to do
+        elif "running cloud workstation" in msg:
+            print(f"  WARNING: data-dict-capsule has a running workstation — "
+                  f"can't detach. Stop it and re-run the orchestrator.")
+            errors.append({"subject": subject, "date": date, "stem": stem,
+                           "error": "data-dict-capsule workstation running"})
+            continue
+        else:
+            print(f"  (detach warning: {e})")
+
     try:
         params = RunParams(
             capsule_id=DATA_DICT_CAPSULE_ID,
