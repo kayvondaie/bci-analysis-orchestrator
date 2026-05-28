@@ -261,17 +261,17 @@ for subject, date, stem in pairs:
             print(f"  (detach warning: {e})")
 
     try:
+        # Use 'parameters' (positional list[str]) — they become $1, $2, $3
+        # to /code/run, which exports them as SUBJECT/DATE/TARGET_STEM
+        # env vars. 'named_parameters' would require an App Builder
+        # definition on the capsule, which we don't have.
         params = RunParams(
             capsule_id=DATA_DICT_CAPSULE_ID,
             data_assets=[
                 DataAssetsRunParam(id=raw.id, mount=raw.name),
                 DataAssetsRunParam(id=proc.id, mount=proc.name),
             ],
-            named_parameters=[
-                NamedRunParam(param_name="SUBJECT", value=subject),
-                NamedRunParam(param_name="DATE", value=date),
-                NamedRunParam(param_name="TARGET_STEM", value=stem),
-            ],
+            parameters=[subject, date, stem],
         )
         comp = client.computations.run_capsule(params)
         print(f"  LAUNCHED computation id={comp.id}")
