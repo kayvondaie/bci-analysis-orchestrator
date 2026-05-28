@@ -154,8 +154,11 @@ def find_asset_pair(subject: str, date: str):
 
     Picks the most recently-created processed asset that prefix-matches the raw.
     """
+    # Search by subject only — CO's search doesn't tokenize hyphenated dates,
+    # so 'name:single-plane-ophys_850381_2026-05-27' returns 0 even though the
+    # bare subject does match. Filter by date in Python below.
     results = client.data_assets.search_data_assets(DataAssetSearchParams(
-        query=f"name:single-plane-ophys_{subject}_{date}", limit=100,
+        query=f"name:single-plane-ophys_{subject}", limit=200,
     ))
     candidates = results.results
     prefix = f"single-plane-ophys_{subject}_{date}_"
