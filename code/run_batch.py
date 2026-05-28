@@ -138,6 +138,46 @@ else:
     pairs = auto_discover_pairs(HOURS)
     print(f"\nAuto-discovered {len(pairs)} session(s) in last {HOURS} hours")
 
+
+# ---------------------------------------------------------------------------
+# Sweeping pre-detach: remove ALL single-plane-ophys_* assets currently
+# attached to the data-dict capsule at capsule level. Each Reproducible Run
+# inherits the capsule's persistent attachments + adds its own — if there
+# are leftover capsule-level attachments, every container ends up mounting
+# them too, which slows "Attaching Data Assets" significantly. By detaching
+# everything ahead of time, each run only mounts its own 2 assets.
+#
+# Best-effort: swallows "not attached" / 404 errors. Will fail loudly only
+# if the data-dict capsule's workstation is running (which blocks all
+# attachment modifications).
+# ---------------------------------------------------------------------------
+print(f"\nSweeping detach of all single-plane-ophys_* assets from data-dict-capsule...")
+sweep_results = client.data_assets.search_data_assets(DataAssetSearchParams(
+    query="single-plane-ophys_8", limit=500,
+))
+detach_ids = [a.id for a in sweep_results.results]
+print(f"  candidates: {len(detach_ids)}")
+n_detached = 0
+n_skipped = 0
+for asset_id in detach_ids:
+    try:
+        client.capsules.detach_data_assets(
+            capsule_id=DATA_DICT_CAPSULE_ID,
+            data_assets=[asset_id],
+        )
+        n_detached += 1
+    except Exception as e:
+        msg = str(e).lower()
+        if "not attached" in msg or "404" in msg or "not found" in msg:
+            n_skipped += 1
+        elif "running cloud workstation" in msg:
+            print(f"  ABORT: data-dict-capsule has a running workstation. "
+                  f"Stop it and re-run the orchestrator.")
+            sys.exit(5)
+        else:
+            print(f"  detach warning for {asset_id}: {e}")
+print(f"  detached {n_detached}, already-detached {n_skipped}")
+
 for subject, date, stem in pairs:
     print(f"  {subject}  {date}  stem={stem}")
 
