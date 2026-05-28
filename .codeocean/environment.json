@@ -6,6 +6,18 @@
 		"git_ask_pass": true,
 		"mount_secrets": true
 	},
+	"installers": {
+		"pip": {
+			"packages": [
+				{
+					"name": "codeocean",
+					"version": "0.15.0"
+				}
+			],
+			"options": {},
+			"pre_install_options": {}
+		}
+	},
 	"env_variables": [
 		{
 			"name": "CODEOCEAN_TOKEN",
