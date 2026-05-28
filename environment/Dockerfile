@@ -1,4 +1,4 @@
-# hash:sha256:ebb6f677d5dd6b81dd75bec0ad3b0ea85641087a4bd60d7f42ad427921d3370f
+# hash:sha256:b475000773406743e640186b07238bfda6e331c2cc724130e1abfd40770e4fe6
 ARG REGISTRY_HOST
 FROM $REGISTRY_HOST/codeocean/jupyterlab:3.4.4-miniconda4.12.0-python3.9-ubuntu20.04
 
@@ -7,6 +7,7 @@ ARG GIT_ASKPASS
 COPY git-ask-pass /
 
 ENV CODEOCEAN_TOKEN=cop_ZGE5YjljNTc5YTZhNDVhMzg4NjdiNDE2ZjYwYjZjYzVsYUtodXFPYnZFWmdvTzhrdTZVZjhTbmFlOXF0QUtzTTNjODlmMzhj
+ENV SESSION=850378:2026-05-27
 
 RUN pip install -U --no-cache-dir \
     codeocean==0.15.0

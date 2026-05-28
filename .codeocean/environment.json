@@ -43,6 +43,10 @@
 		{
 			"name": "CODEOCEAN_TOKEN",
 			"value": "cop_ZGE5YjljNTc5YTZhNDVhMzg4NjdiNDE2ZjYwYjZjYzVsYUtodXFPYnZFWmdvTzhrdTZVZjhTbmFlOXF0QUtzTTNjODlmMzhj"
+		},
+		{
+			"name": "SESSION",
+			"value": "850378:2026-05-27"
 		}
 	]
 }
