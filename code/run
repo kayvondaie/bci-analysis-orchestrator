@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -ex
+
+# bci-analysis-orchestrator entry point.
+#
+# Fires N Reproducible Runs of bci-data-dict-capsule-bruker, one per
+# session. Doesn't wait for them to finish — captured /results/ assets
+# appear in CO once each individual run completes.
+#
+# Env vars (set as capsule env vars in CO, not in this file):
+#   CODEOCEAN_TOKEN         required. Your CO API token (cop_...).
+#   DATA_DICT_CAPSULE_ID    target capsule UUID. Defaults to keeper UUID below.
+#   HOURS                   look back this many hours when auto-discovering. Default 30.
+#   SESSIONS                optional override: "850378:2026-05-26,824468:2026-05-27:bci2"
+#   TARGET_STEM             default epoch to analyze if not specified per-session. Default 'bci'.
+
+cd /code
+python -u run_batch.py
