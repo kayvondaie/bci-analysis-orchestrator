@@ -1,27 +1,26 @@
-"""Orchestrator: process N BCI sessions in ONE Reproducible Run of the
-data-dict-capsule.
+"""Orchestrator: prep the data-dict-capsule for a workstation batch.
 
-Why one run, not N: each Reproducible Run mounts its data assets from
-cold cache (the slow "Attaching Data Assets" step). N runs = N mount
-penalties. One run with N pairs attached at capsule level pays the mount
-cost once for all assets, then the run script loops through sessions
-internally.
+Purpose: attach all recently-uploaded BCI sessions to the data-dict-capsule
+at capsule level. Does NOT run the data-dict-capsule itself.
 
-For each session (auto-discovered or explicitly listed), this:
-  1. Sweeps existing capsule-level attachments off the data-dict-capsule
-  2. Attaches all (raw, processed) pairs at capsule level (instant — just
-     a metadata update)
-  3. Launches ONE Reproducible Run of the data-dict-capsule with
-     SESSIONS=<comma-separated list> as a positional parameter
-  4. The data-dict-capsule's code/run loops over SESSIONS, calling
-     run_session.py for each. Outputs land in /results/<sess>/.
+Daily flow:
+  1. Sessions auto-upload via spyder_upload.py
+  2. kd pipeline auto-runs (produces processed assets)
+  3. THIS orchestrator runs (auto: attaches recent assets to data-dict-capsule)
+  4. You launch the data-dict-capsule cloud workstation
+  5. Run explore.py — it auto-discovers attached sessions and processes them all
+  6. Stop workstation -> "save results as asset" -> CO asset with all session outputs
 
-Captured asset contains all per-session outputs (data_dict.pkl + figures
-+ run_log.txt under <subject>_<date>_<stem>/ subdirs).
+Behavior:
+  - Sweeps off all single-plane-ophys_* attachments currently on
+    data-dict-capsule (clean slate)
+  - Attaches every (raw, processed) pair created in the last HOURS that
+    has a matching processed asset
+  - Prints what was attached and the suggested workstation command
 
 Env vars:
   CODEOCEAN_TOKEN         required — CO API token (cop_...)
-  DATA_DICT_CAPSULE_ID    target capsule UUID
+  DATA_DICT_CAPSULE_ID    target capsule UUID (default: keeper)
   HOURS                   look back this many hours (default 30)
   SESSIONS                optional override list:
                             "850378:2026-05-26,824468:2026-05-27:bci2"
@@ -39,7 +38,6 @@ from pathlib import Path
 from codeocean import CodeOcean
 from codeocean.data_asset import DataAssetSearchParams
 from codeocean.capsule import DataAssetAttachParams
-from codeocean.computation import RunParams
 
 # ---------------------------------------------------------------------------
 # Config
@@ -48,7 +46,7 @@ TOKEN = os.environ.get("CODEOCEAN_TOKEN")
 DOMAIN = os.environ.get("CODEOCEAN_DOMAIN", "https://codeocean.allenneuraldynamics.org")
 DATA_DICT_CAPSULE_ID = os.environ.get(
     "DATA_DICT_CAPSULE_ID",
-    "12239610-4b38-4e30-8391-e52b6d89a76c",  # bci-data-dict-capsule-bruker (keeper, slug 3591777)
+    "12239610-4b38-4e30-8391-e52b6d89a76c",  # bci-data-dict-capsule-bruker (keeper)
 )
 HOURS = int(os.environ.get("HOURS", "30"))
 SESSIONS_RAW = os.environ.get("SESSIONS", "").strip()
@@ -64,7 +62,7 @@ if not TOKEN:
 client = CodeOcean(domain=DOMAIN, token=TOKEN)
 
 print(f"{'='*70}")
-print(f"BCI Analysis Orchestrator (single-run batch mode)")
+print(f"BCI Analysis Orchestrator (attach-only mode)")
 print(f"  Target capsule: {DATA_DICT_CAPSULE_ID}")
 print(f"  Look back:      {HOURS} hours")
 print(f"  SESSIONS:       {SESSIONS_RAW or '(auto-discover)'}")
@@ -84,14 +82,11 @@ def parse_sessions_override(s: str) -> list[tuple[str, str, str]]:
             continue
         parts = [p.strip() for p in tok.split(":")]
         if len(parts) == 2:
-            subject, date = parts
-            stem = DEFAULT_TARGET_STEM
+            out.append((parts[0], parts[1], DEFAULT_TARGET_STEM))
         elif len(parts) == 3:
-            subject, date, stem = parts
+            out.append((parts[0], parts[1], parts[2]))
         else:
             print(f"WARNING: skipping malformed SESSIONS entry: {tok!r}", file=sys.stderr)
-            continue
-        out.append((subject, date, stem))
     return out
 
 
@@ -101,7 +96,6 @@ def auto_discover_pairs(hours: int) -> list[tuple[str, str, str]]:
         query="single-plane-ophys_8", limit=500,
     ))
     candidates = results.results
-
     raws = [
         a for a in candidates
         if a.name.startswith("single-plane-ophys_")
@@ -109,7 +103,6 @@ def auto_discover_pairs(hours: int) -> list[tuple[str, str, str]]:
         and a.created >= cutoff
     ]
     procs = [a for a in candidates if "_processed_" in a.name]
-
     pairs: list[tuple[str, str, str]] = []
     for raw in raws:
         m = re.match(r"single-plane-ophys_(\d+)_(\d{4}-\d{2}-\d{2})_", raw.name)
@@ -135,21 +128,19 @@ for subject, date, stem in pairs:
     print(f"  {subject}  {date}  stem={stem}")
 
 if not pairs:
-    print("\nNothing to do.")
+    print("\nNothing to attach.")
     sys.exit(0)
 
 
 # ---------------------------------------------------------------------------
-# Asset lookup per session (raw + processed IDs)
+# Resolve to asset IDs
 # ---------------------------------------------------------------------------
 def find_asset_pair(subject: str, date: str):
-    """Return (raw_asset, processed_asset) or (raw, None, err) or (None, None, err)."""
     results = client.data_assets.search_data_assets(DataAssetSearchParams(
         query=f"name:single-plane-ophys_{subject}", limit=200,
     ))
     candidates = results.results
     prefix = f"single-plane-ophys_{subject}_{date}_"
-
     raws = [a for a in candidates if a.name.startswith(prefix) and "_processed_" not in a.name]
     procs = [a for a in candidates if a.name.startswith(prefix) and "_processed_" in a.name]
 
@@ -158,7 +149,6 @@ def find_asset_pair(subject: str, date: str):
     if len(raws) > 1:
         return None, None, f"multiple raw assets: {[r.name for r in raws]}"
     raw = raws[0]
-
     matching = [p for p in procs if p.name.startswith(raw.name + "_processed_")]
     if not matching:
         return raw, None, "no processed asset matching this raw"
@@ -166,13 +156,12 @@ def find_asset_pair(subject: str, date: str):
     return raw, matching[0], None
 
 
-# Resolve all pairs to asset IDs
 resolved: list[dict] = []
 errors: list[dict] = []
 for subject, date, stem in pairs:
     raw, proc, err = find_asset_pair(subject, date)
     if err:
-        print(f"\n--- {subject} {date} {stem} ---  SKIP: {err}")
+        print(f"  SKIP {subject} {date} {stem}: {err}")
         errors.append({"subject": subject, "date": date, "stem": stem, "error": err})
         continue
     resolved.append({
@@ -180,18 +169,10 @@ for subject, date, stem in pairs:
         "raw_id": raw.id, "raw_name": raw.name,
         "proc_id": proc.id, "proc_name": proc.name,
     })
-    print(f"  resolved {subject} {date} {stem}: raw={raw.name[:50]}..., proc={proc.name[:50]}...")
-
-if not resolved:
-    print("\nNo sessions resolved to asset IDs.")
-    summary_path = RESULTS / "runs.json"
-    with open(summary_path, "w") as f:
-        json.dump({"launched": [], "errors": errors, "ran_at": datetime.now(timezone.utc).isoformat()}, f, indent=2)
-    sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
-# Sweeping pre-detach (clean slate on data-dict-capsule)
+# Sweeping pre-detach
 # ---------------------------------------------------------------------------
 print(f"\nSweeping detach of all single-plane-ophys_* assets from data-dict-capsule...")
 sweep_results = client.data_assets.search_data_assets(DataAssetSearchParams(
@@ -221,63 +202,44 @@ print(f"  detached {n_detached}, already-detached {n_skipped}")
 
 
 # ---------------------------------------------------------------------------
-# Attach all (raw, proc) pairs at CAPSULE LEVEL (instant metadata update,
-# and the one upcoming Reproducible Run mounts them all together so we pay
-# the fuse-mount cost once instead of N times).
+# Attach the N (raw, proc) pairs at capsule level
 # ---------------------------------------------------------------------------
-print(f"\nAttaching {2 * len(resolved)} assets to data-dict-capsule (capsule level)...")
 all_attach_params = []
 for r in resolved:
     all_attach_params.append(DataAssetAttachParams(id=r["raw_id"], mount=r["raw_name"]))
     all_attach_params.append(DataAssetAttachParams(id=r["proc_id"], mount=r["proc_name"]))
-try:
-    client.capsules.attach_data_assets(
-        capsule_id=DATA_DICT_CAPSULE_ID,
-        attach_params=all_attach_params,
-    )
-    print(f"  attached {len(all_attach_params)} assets")
-except Exception as e:
-    print(f"  attach error: {e}")
-    sys.exit(6)
+
+print(f"\nAttaching {len(all_attach_params)} assets to data-dict-capsule (capsule level)...")
+if all_attach_params:
+    try:
+        client.capsules.attach_data_assets(
+            capsule_id=DATA_DICT_CAPSULE_ID,
+            attach_params=all_attach_params,
+        )
+        print(f"  attached {len(all_attach_params)} assets")
+    except Exception as e:
+        print(f"  attach error: {e}")
+        sys.exit(6)
 
 
 # ---------------------------------------------------------------------------
-# Launch ONE Reproducible Run with SESSIONS env var (passed as positional arg)
+# Summary + workstation instructions
 # ---------------------------------------------------------------------------
-sessions_str = ",".join(f"{r['subject']}:{r['date']}:{r['stem']}" for r in resolved)
-print(f"\nLaunching ONE Reproducible Run on data-dict-capsule...")
-print(f"  SESSIONS param = {sessions_str}")
+print(f"\n{'='*70}")
+print(f"Done. {len(resolved)} session(s) attached to data-dict-capsule.")
+print(f"{'='*70}")
+print(f"\nNext step — launch the data-dict-capsule cloud workstation:")
+print(f"  https://codeocean.allenneuraldynamics.org/capsule/3591777/tree")
+print(f"\nIn the workstation, open code/explore.py and Shift+Enter through")
+print(f"CELLs 1-3. It will auto-discover the attached sessions and process")
+print(f"each one into /results/<subject>_<date>_<stem>/.")
+print(f"\nWhen done, stop the workstation and capture /results/ as a CO asset.")
 
-try:
-    # NOTE: data-dict-capsule's /code/run treats $1 as the SESSIONS list
-    # (comma-separated). It loops internally and calls run_session.py per
-    # entry, dropping outputs into /results/<subject>_<date>_<stem>/.
-    params = RunParams(
-        capsule_id=DATA_DICT_CAPSULE_ID,
-        parameters=[sessions_str],
-    )
-    comp = client.computations.run_capsule(params)
-    print(f"  LAUNCHED computation id={comp.id}")
-    print(f"\nAll {len(resolved)} sessions will be processed in this one container.")
-    print(f"Watch progress in the data-dict-capsule's run history.")
-except Exception as e:
-    print(f"  LAUNCH FAILED: {e}")
-    errors.append({"error": f"launch failed: {e}", "sessions": sessions_str})
-
-
-# ---------------------------------------------------------------------------
-# Summary
-# ---------------------------------------------------------------------------
 summary = {
-    "launched": [{"computation_id": comp.id if 'comp' in dir() else None,
-                  "sessions": sessions_str,
-                  "resolved": resolved}],
+    "attached": resolved,
     "errors": errors,
     "ran_at": datetime.now(timezone.utc).isoformat(),
 }
-summary_path = RESULTS / "runs.json"
-with open(summary_path, "w") as f:
+with open(RESULTS / "attached.json", "w") as f:
     json.dump(summary, f, indent=2)
-print(f"\n{'='*70}")
-print(f"Orchestrator done. Wrote {summary_path}")
-print(f"{'='*70}")
+print(f"\nDetails in /results/attached.json")
