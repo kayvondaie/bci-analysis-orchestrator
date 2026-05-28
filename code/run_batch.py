@@ -38,6 +38,8 @@ from pathlib import Path
 from codeocean import CodeOcean
 from codeocean.data_asset import DataAssetSearchParams
 from codeocean.capsule import DataAssetAttachParams
+# Same DataAssetAttachParams works for both capsule.attach_data_assets and
+# computations.attach_data_assets (the latter targets a running workstation).
 
 # ---------------------------------------------------------------------------
 # Config
@@ -172,54 +174,110 @@ for subject, date, stem in pairs:
 
 
 # ---------------------------------------------------------------------------
-# Sweeping pre-detach
+# Detect running workstation on data-dict-capsule
+# If there is one, attach assets to the running COMPUTATION (live workstation
+# sees /data/ updates without restart). Otherwise fall back to capsule-level.
 # ---------------------------------------------------------------------------
-print(f"\nSweeping detach of all single-plane-ophys_* assets from data-dict-capsule...")
-sweep_results = client.data_assets.search_data_assets(DataAssetSearchParams(
-    query="single-plane-ophys_8", limit=500,
-))
-detach_ids = [a.id for a in sweep_results.results]
-print(f"  candidates: {len(detach_ids)}")
-n_detached = 0
-n_skipped = 0
-for asset_id in detach_ids:
-    try:
-        client.capsules.detach_data_assets(
-            capsule_id=DATA_DICT_CAPSULE_ID,
-            data_assets=[asset_id],
-        )
-        n_detached += 1
-    except Exception as e:
-        msg = str(e).lower()
-        if "not attached" in msg or "404" in msg or "not found" in msg:
-            n_skipped += 1
-        elif "running cloud workstation" in msg:
-            print(f"  ABORT: data-dict-capsule has a running workstation. Stop it and re-run.")
-            sys.exit(5)
-        else:
-            print(f"  detach warning for {asset_id}: {e}")
-print(f"  detached {n_detached}, already-detached {n_skipped}")
+running_computation_id = None
+try:
+    comps = client.capsules.list_computations(capsule_id=DATA_DICT_CAPSULE_ID)
+    # Look for the most-recent computation in "running" state.
+    running = [c for c in comps if str(getattr(c, "state", "")).lower().endswith("running")]
+    if running:
+        running.sort(key=lambda c: getattr(c, "created", 0), reverse=True)
+        running_computation_id = running[0].id
+        print(f"\nFound running workstation on data-dict-capsule:")
+        print(f"  computation_id = {running_computation_id}")
+        print(f"  -> will attach assets directly to this live workstation")
+except Exception as e:
+    print(f"\nNote: could not list computations ({e}); falling back to capsule-level.")
+
+if running_computation_id is None:
+    print(f"\nNo running workstation; will use capsule-level attach.")
 
 
 # ---------------------------------------------------------------------------
-# Attach the N (raw, proc) pairs at capsule level
+# Build attach params (same shape for capsule-level and computation-level)
 # ---------------------------------------------------------------------------
 all_attach_params = []
 for r in resolved:
     all_attach_params.append(DataAssetAttachParams(id=r["raw_id"], mount=r["raw_name"]))
     all_attach_params.append(DataAssetAttachParams(id=r["proc_id"], mount=r["proc_name"]))
 
-print(f"\nAttaching {len(all_attach_params)} assets to data-dict-capsule (capsule level)...")
-if all_attach_params:
+
+if running_computation_id is not None:
+    # ---- Live workstation path ----
+    # No sweep needed: the running workstation's mount list is its own
+    # state, independent of capsule-level attachments.
+    print(f"\nAttaching {len(all_attach_params)} assets to LIVE workstation "
+          f"(computation {running_computation_id})...")
     try:
-        client.capsules.attach_data_assets(
-            capsule_id=DATA_DICT_CAPSULE_ID,
+        client.computations.attach_data_assets(
+            computation_id=running_computation_id,
             attach_params=all_attach_params,
         )
         print(f"  attached {len(all_attach_params)} assets")
+        print(f"  -> they should appear in /data/ of the running workstation "
+              f"with no restart needed")
     except Exception as e:
-        print(f"  attach error: {e}")
-        sys.exit(6)
+        # Some attachments may already exist on the live workstation; treat
+        # 'already attached' as a soft warning rather than a hard fail.
+        msg = str(e).lower()
+        if "already attached" in msg:
+            print(f"  Some assets were already attached to this workstation:")
+            print(f"    {e}")
+            print(f"  Retrying per-asset to attach the new ones...")
+            for p in all_attach_params:
+                try:
+                    client.computations.attach_data_assets(
+                        computation_id=running_computation_id,
+                        attach_params=[p],
+                    )
+                    print(f"    OK   {p.mount}")
+                except Exception as e2:
+                    print(f"    skip {p.mount}: {e2}")
+        else:
+            print(f"  attach error: {e}")
+            sys.exit(6)
+else:
+    # ---- Capsule-level path (workstation stopped) ----
+    print(f"\nSweeping detach of all single-plane-ophys_* assets from data-dict-capsule...")
+    sweep_results = client.data_assets.search_data_assets(DataAssetSearchParams(
+        query="single-plane-ophys_8", limit=500,
+    ))
+    detach_ids = [a.id for a in sweep_results.results]
+    print(f"  candidates: {len(detach_ids)}")
+    n_detached = 0
+    n_skipped = 0
+    for asset_id in detach_ids:
+        try:
+            client.capsules.detach_data_assets(
+                capsule_id=DATA_DICT_CAPSULE_ID,
+                data_assets=[asset_id],
+            )
+            n_detached += 1
+        except Exception as e:
+            msg = str(e).lower()
+            if "not attached" in msg or "404" in msg or "not found" in msg:
+                n_skipped += 1
+            elif "running cloud workstation" in msg:
+                print(f"  ABORT: data-dict-capsule workstation started during the sweep. Re-run.")
+                sys.exit(5)
+            else:
+                print(f"  detach warning for {asset_id}: {e}")
+    print(f"  detached {n_detached}, already-detached {n_skipped}")
+
+    print(f"\nAttaching {len(all_attach_params)} assets to data-dict-capsule (capsule level)...")
+    if all_attach_params:
+        try:
+            client.capsules.attach_data_assets(
+                capsule_id=DATA_DICT_CAPSULE_ID,
+                attach_params=all_attach_params,
+            )
+            print(f"  attached {len(all_attach_params)} assets")
+        except Exception as e:
+            print(f"  attach error: {e}")
+            sys.exit(6)
 
 
 # ---------------------------------------------------------------------------
