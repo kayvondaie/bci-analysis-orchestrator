@@ -1,6 +1,9 @@
-FROM registry.codeocean.allenneuraldynamics.org/codeocean/jupyterlab:3.4.4-miniconda4.12.0-python3.9-ubuntu20.04
+# hash:sha256:af08627ff3f34c154001bc4251cd59301ecbdd76257aaa4944ff79115632336f
+ARG REGISTRY_HOST
+FROM $REGISTRY_HOST/codeocean/jupyterlab:3.4.4-miniconda4.12.0-python3.9-ubuntu20.04
 
 ARG DEBIAN_FRONTEND=noninteractive
+ARG GIT_ASKPASS
+COPY git-ask-pass /
 
-RUN pip3 install -U --no-cache-dir \
-    codeocean
+ENV CODEOCEAN_TOKEN=cop_ZGE5YjljNTc5YTZhNDVhMzg4NjdiNDE2ZjYwYjZjYzVsYUtodXFPYnZFWmdvTzhrdTZVZjhTbmFlOXF0QUtzTTNjODlmMzhj
